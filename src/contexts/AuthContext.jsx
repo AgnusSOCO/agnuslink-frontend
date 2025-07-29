@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 const AuthContext = createContext();
 
@@ -13,147 +14,181 @@ export const useAuth = () => {
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [token, setToken] = useState(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const navigate = useNavigate();
 
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
   // Check for existing token on app load
   useEffect(() => {
-    const savedToken = localStorage.getItem('token');
-    const savedUser = localStorage.getItem('user');
-    
-    if (savedToken && savedUser) {
-      try {
-        setToken(savedToken);
-        setUser(JSON.parse(savedUser));
-      } catch (error) {
-        console.error('Error parsing saved user data:', error);
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-      }
+    const token = localStorage.getItem('token');
+    if (token) {
+      // Verify token and get user data
+      fetchCurrentUser(token);
+    } else {
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
+
+  const fetchCurrentUser = async (token) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setUser(data.user);
+        setIsAuthenticated(true);
+        
+        // Check onboarding status and redirect if needed
+        if (data.requires_onboarding) {
+          console.log('User requires onboarding, redirecting...');
+          navigate('/onboarding', { replace: true });
+        }
+      } else {
+        // Token is invalid
+        localStorage.removeItem('token');
+        setUser(null);
+        setIsAuthenticated(false);
+      }
+    } catch (error) {
+      console.error('Error fetching current user:', error);
+      localStorage.removeItem('token');
+      setUser(null);
+      setIsAuthenticated(false);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const login = async (email, password) => {
     try {
-      console.log('Attempting login with:', { email, API_BASE_URL });
+      setLoading(true);
       
       const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password })
       });
 
-      console.log('Login response status:', response.status);
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Login failed:', errorText);
-        throw new Error(`Login failed: ${response.status}`);
-      }
-
       const data = await response.json();
-      console.log('Login response data:', data);
 
-      if (data.success && data.token && data.user) {
-        // Store token and user data
+      if (response.ok) {
+        // Store token
         localStorage.setItem('token', data.token);
-        localStorage.setItem('user', JSON.stringify(data.user));
         
-        // Update state
-        setToken(data.token);
+        // Set user data
         setUser(data.user);
+        setIsAuthenticated(true);
         
-        console.log('Login successful, user set:', data.user);
-        return { success: true, user: data.user };
+        console.log('Login successful:', data);
+        console.log('Requires onboarding:', data.requires_onboarding);
+        console.log('Redirect to:', data.redirect_to);
+        
+        // Handle redirect based on onboarding status
+        if (data.requires_onboarding) {
+          console.log('Redirecting to onboarding...');
+          navigate('/onboarding', { replace: true });
+        } else {
+          console.log('Redirecting to dashboard...');
+          navigate('/dashboard', { replace: true });
+        }
+        
+        return { success: true, data };
       } else {
-        throw new Error(data.message || 'Login failed');
+        return { success: false, error: data.error || 'Login failed' };
       }
     } catch (error) {
       console.error('Login error:', error);
-      throw error;
+      return { success: false, error: 'Network error. Please try again.' };
+    } finally {
+      setLoading(false);
     }
   };
 
   const register = async (userData) => {
     try {
-      console.log('Attempting registration with:', userData);
+      setLoading(true);
       
       const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json'
         },
-        body: JSON.stringify(userData),
+        body: JSON.stringify(userData)
       });
 
-      console.log('Register response status:', response.status);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Registration failed:', errorText);
-        throw new Error(`Registration failed: ${response.status}`);
-      }
-
       const data = await response.json();
-      console.log('Registration response data:', data);
 
-      if (data.success && data.token && data.user) {
-        // Store token and user data
+      if (response.ok) {
+        // Store token
         localStorage.setItem('token', data.token);
-        localStorage.setItem('user', JSON.stringify(data.user));
         
-        // Update state
-        setToken(data.token);
+        // Set user data
         setUser(data.user);
+        setIsAuthenticated(true);
         
-        console.log('Registration successful, user set:', data.user);
-        return { success: true, user: data.user };
+        console.log('Registration successful:', data);
+        console.log('Requires onboarding:', data.requires_onboarding);
+        
+        // New users always need onboarding
+        console.log('Redirecting to onboarding...');
+        navigate('/onboarding', { replace: true });
+        
+        return { success: true, data };
       } else {
-        throw new Error(data.message || 'Registration failed');
+        return { success: false, error: data.error || 'Registration failed' };
       }
     } catch (error) {
       console.error('Registration error:', error);
-      throw error;
+      return { success: false, error: 'Network error. Please try again.' };
+    } finally {
+      setLoading(false);
     }
   };
 
   const logout = () => {
     localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    setToken(null);
     setUser(null);
-    console.log('User logged out');
+    setIsAuthenticated(false);
+    navigate('/login', { replace: true });
   };
 
-  const isAuthenticated = () => {
-    return !!token && !!user;
-  };
-
-  // Function to make authenticated API requests
+  // API helper function with auth headers
   const apiRequest = async (endpoint, options = {}) => {
-    const url = `${API_BASE_URL}${endpoint}`;
-    const config = {
+    const token = localStorage.getItem('token');
+    
+    const defaultOptions = {
       headers: {
         'Content-Type': 'application/json',
-        ...(token && { 'Authorization': `Bearer ${token}` }),
-        ...options.headers,
-      },
+        ...(token && { 'Authorization': `Bearer ${token}` })
+      }
+    };
+
+    const mergedOptions = {
+      ...defaultOptions,
       ...options,
+      headers: {
+        ...defaultOptions.headers,
+        ...options.headers
+      }
     };
 
     try {
-      const response = await fetch(url, config);
+      const response = await fetch(`${API_BASE_URL}${endpoint}`, mergedOptions);
       
+      // Handle unauthorized responses
       if (response.status === 401) {
-        // Token expired or invalid
         logout();
-        throw new Error('Authentication expired');
+        return null;
       }
-
+      
       return response;
     } catch (error) {
       console.error('API request error:', error);
@@ -163,13 +198,13 @@ export const AuthProvider = ({ children }) => {
 
   const value = {
     user,
-    token,
     loading,
+    isAuthenticated,
     login,
     register,
     logout,
-    isAuthenticated,
     apiRequest,
+    API_BASE_URL
   };
 
   return (
