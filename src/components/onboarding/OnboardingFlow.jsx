@@ -28,7 +28,7 @@ const OnboardingFlow = () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/onboarding/status`, {
+     const response = await fetch(`${import.meta.env.VITE_API_URL}/api/onboarding/status`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
