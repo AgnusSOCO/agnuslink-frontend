@@ -1,17 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
-import { Button } from '../ui/button';
-import { Progress } from '../ui/progress';
-import { CheckCircle, Clock, Upload, FileText, AlertCircle, RefreshCw } from 'lucide-react';
 
 const OnboardingFlow = () => {
-  const { user, apiRequest } = useAuth();
-  const navigate = useNavigate();
+  const { user } = useAuth();
+  const [currentStep, setCurrentStep] = useState(1);
   const [onboardingData, setOnboardingData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState('');
+  const [personalInfo, setPersonalInfo] = useState({
+    first_name: '',
+    last_name: '',
+    phone: '',
+    address: '',
+    city: '',
+    state: '',
+    zip_code: ''
+  });
+  const [kycData, setKycData] = useState({
+    document_type: 'drivers_license'
+  });
 
   useEffect(() => {
     fetchOnboardingStatus();
@@ -19,469 +26,375 @@ const OnboardingFlow = () => {
 
   const fetchOnboardingStatus = async () => {
     try {
-      setError(null);
-      console.log('Fetching onboarding status...');
-      
-      const response = await apiRequest('/api/onboarding/status');
-      console.log('Onboarding status response:', response);
-      
-      if (response && response.ok) {
+      setLoading(true);
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/onboarding/status`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
         const data = await response.json();
-        console.log('Onboarding data:', data);
         setOnboardingData(data);
+        setCurrentStep(data.current_step);
         
-        // If onboarding is complete, redirect to dashboard
-        if (data.onboarding_complete) {
-          navigate('/dashboard', { replace: true });
-        }
+        // Pre-fill personal info if available
+        setPersonalInfo({
+          first_name: data.first_name || '',
+          last_name: data.last_name || '',
+          phone: data.phone || '',
+          address: data.address || '',
+          city: data.city || '',
+          state: data.state || '',
+          zip_code: data.zip_code || ''
+        });
       } else {
-        const errorData = await response.json();
-        console.error('Onboarding status error:', errorData);
-        setError(errorData.error || 'Failed to fetch onboarding status');
+        setError('Failed to load onboarding status');
       }
-    } catch (error) {
-      console.error('Error fetching onboarding status:', error);
-      setError('Unable to connect to server. Please check your connection.');
+    } catch (err) {
+      setError('Connection error: ' + err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleStartSigning = async () => {
+  const updatePersonalInfo = async () => {
     try {
       setLoading(true);
-      setError(null);
-      
-      console.log('Starting document signing...');
-      const response = await apiRequest('/api/onboarding/start-signature', {
-        method: 'POST'
-      });
-      
-      if (response && response.ok) {
-        const data = await response.json();
-        console.log('Signing response:', data);
-        
-        if (data.signing_link) {
-          // Open signing URL in new window/tab
-          const signingWindow = window.open(
-            data.signing_link, 
-            '_blank', 
-            'width=900,height=700,scrollbars=yes,resizable=yes'
-          );
-          
-          // Check if window was blocked
-          if (!signingWindow) {
-            alert('Please allow popups for this site to open the signing window.');
-            return;
-          }
-          
-          // Monitor window and refresh status when closed
-          const checkClosed = setInterval(() => {
-            if (signingWindow.closed) {
-              clearInterval(checkClosed);
-              console.log('Signing window closed, refreshing status...');
-              setTimeout(() => {
-                fetchOnboardingStatus();
-              }, 2000);
-            }
-          }, 1000);
-          
-        } else {
-          setError('No signing link received from server');
-        }
-      } else {
-        const errorData = await response.json();
-        console.error('Signing error:', errorData);
-        setError(errorData.error || 'Failed to start document signing');
-      }
-    } catch (error) {
-      console.error('Error starting signature:', error);
-      setError('Failed to start document signing. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleFileUpload = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    // Validate file size (10MB limit)
-    if (file.size > 10 * 1024 * 1024) {
-      setError('File size must be less than 10MB');
-      return;
-    }
-
-    // Validate file type
-    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
-    if (!allowedTypes.includes(file.type)) {
-      setError('Please upload a PDF, JPG, or PNG file');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setError(null);
-      
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('document_type', 'government_id');
-
-      console.log('Uploading KYC document...');
-      const response = await apiRequest('/api/onboarding/upload-kyc', {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/onboarding/update-personal-info`, {
         method: 'POST',
-        body: formData,
-        // Don't set Content-Type header for FormData
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(personalInfo)
       });
 
-      if (response && response.ok) {
-        const data = await response.json();
-        console.log('Upload response:', data);
-        alert('Document uploaded successfully! It will be reviewed by our team.');
-        fetchOnboardingStatus();
+      if (response.ok) {
+        await fetchOnboardingStatus(); // Refresh status
+        setCurrentStep(2); // Move to next step
       } else {
         const errorData = await response.json();
-        console.error('Upload error:', errorData);
-        setError(errorData.error || 'Failed to upload document');
+        setError(errorData.error || 'Failed to update personal information');
       }
-    } catch (error) {
-      console.error('Error uploading file:', error);
-      setError('Failed to upload document. Please try again.');
+    } catch (err) {
+      setError('Failed to update personal information: ' + err.message);
     } finally {
       setLoading(false);
-      // Reset file input
-      event.target.value = '';
+    }
+  };
+
+  const submitKYC = async () => {
+    try {
+      setLoading(true);
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/onboarding/upload-kyc`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(kycData)
+      });
+
+      if (response.ok) {
+        await fetchOnboardingStatus(); // Refresh status
+        setCurrentStep(3); // Move to final step
+      } else {
+        const errorData = await response.json();
+        setError(errorData.error || 'Failed to submit KYC documents');
+      }
+    } catch (err) {
+      setError('Failed to submit KYC documents: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const completeOnboarding = async () => {
+    try {
+      setLoading(true);
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/onboarding/complete-onboarding`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        await fetchOnboardingStatus(); // Refresh status
+        alert('Onboarding completed! Our team will send you the agreement to sign shortly.');
+      } else {
+        const errorData = await response.json();
+        setError(errorData.error || 'Failed to complete onboarding');
+      }
+    } catch (err) {
+      setError('Failed to complete onboarding: ' + err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
   if (loading && !onboardingData) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading onboarding status...</p>
+      <div className=\"min-h-screen bg-gray-50 flex items-center justify-center\">
+        <div className=\"text-center\">
+          <div className=\"animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto\"></div>
+          <p className=\"mt-4 text-gray-600\">Loading onboarding status...</p>
         </div>
       </div>
     );
   }
 
-  if (error && !onboardingData) {
+  if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-red-600">
-              <AlertCircle className="h-6 w-6" />
-              Connection Error
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="text-gray-600">{error}</p>
-            <Button onClick={fetchOnboardingStatus} className="w-full">
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Try Again
-            </Button>
-          </CardContent>
-        </Card>
+      <div className=\"min-h-screen bg-gray-50 flex items-center justify-center\">
+        <div className=\"bg-white p-8 rounded-lg shadow-md max-w-md w-full\">
+          <div className=\"text-red-600 text-center\">
+            <h2 className=\"text-xl font-semibold mb-4\">Error</h2>
+            <p className=\"mb-4\">{error}</p>
+            <button 
+              onClick={fetchOnboardingStatus}
+              className=\"bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700\"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
 
-  const getProgressPercentage = () => {
-    if (!onboardingData) return 0;
-    return onboardingData.progress || 0;
-  };
-
-  const getCurrentStep = () => {
-    if (!onboardingData) return 'welcome';
-    return onboardingData.current_step || 'welcome';
-  };
-
-  const getStepStatus = (stepName) => {
-    const currentStep = getCurrentStep();
-    const steps = ['welcome', 'signature', 'kyc_upload', 'review', 'complete'];
-    const currentIndex = steps.indexOf(currentStep);
-    const stepIndex = steps.indexOf(stepName);
-    
-    if (stepIndex < currentIndex) return 'completed';
-    if (stepIndex === currentIndex) return 'current';
-    return 'pending';
-  };
-
-  const renderStepContent = () => {
-    const currentStep = getCurrentStep();
-
-    switch (currentStep) {
-      case 'signature':
-        return (
-          <Card className="w-full max-w-2xl">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <FileText className="h-6 w-6" />
-                Sign Finder's Fee Contract
-              </CardTitle>
-              <CardDescription>
-                Please review and sign the Finder's Fee Contract to continue with your onboarding.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="bg-blue-50 p-4 rounded-lg">
-                <p className="text-sm text-blue-800">
-                  This contract outlines the terms of your affiliate relationship and commission structure.
-                  Please read it carefully before signing.
-                </p>
-              </div>
-              {error && (
-                <div className="bg-red-50 p-4 rounded-lg">
-                  <p className="text-sm text-red-800">{error}</p>
-                </div>
-              )}
-              <Button 
-                onClick={handleStartSigning} 
-                disabled={loading}
-                className="w-full"
-              >
-                {loading ? (
-                  <>
-                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                    Starting...
-                  </>
-                ) : (
-                  'Start Document Signing'
-                )}
-              </Button>
-            </CardContent>
-          </Card>
-        );
-
-      case 'kyc_upload':
-        return (
-          <Card className="w-full max-w-2xl">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Upload className="h-6 w-6" />
-                Upload Government ID
-              </CardTitle>
-              <CardDescription>
-                Please upload a clear photo of your government-issued ID for verification.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="bg-yellow-50 p-4 rounded-lg">
-                <p className="text-sm text-yellow-800">
-                  <strong>Accepted documents:</strong> Driver's License, Passport, State ID Card
-                </p>
-                <p className="text-sm text-yellow-800 mt-1">
-                  <strong>File formats:</strong> PDF, JPG, PNG (Max 10MB)
-                </p>
-              </div>
-              {error && (
-                <div className="bg-red-50 p-4 rounded-lg">
-                  <p className="text-sm text-red-800">{error}</p>
-                </div>
-              )}
-              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 transition-colors">
-                <Upload className="h-12 w-12 mx-auto text-gray-400 mb-4" />
-                <p className="text-sm text-gray-600 mb-4">
-                  Click to select your government ID document
-                </p>
-                <input
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={handleFileUpload}
-                  className="hidden"
-                  id="kyc-upload"
-                  disabled={loading}
-                />
-                <label htmlFor="kyc-upload">
-                  <Button variant="outline" disabled={loading} className="cursor-pointer">
-                    {loading ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                        Uploading...
-                      </>
-                    ) : (
-                      'Select File'
-                    )}
-                  </Button>
-                </label>
-              </div>
-            </CardContent>
-          </Card>
-        );
-
-      case 'review':
-        return (
-          <Card className="w-full max-w-2xl">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Clock className="h-6 w-6" />
-                Under Review
-              </CardTitle>
-              <CardDescription>
-                Your documents are being reviewed by our team.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="bg-blue-50 p-4 rounded-lg">
-                <p className="text-sm text-blue-800">
-                  We're reviewing your submitted documents. This process typically takes 1-2 business days.
-                  You'll receive an email notification once the review is complete.
-                </p>
-              </div>
-              <Button 
-                onClick={fetchOnboardingStatus}
-                variant="outline"
-                className="w-full"
-                disabled={loading}
-              >
-                {loading ? (
-                  <>
-                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                    Checking...
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                    Refresh Status
-                  </>
-                )}
-              </Button>
-            </CardContent>
-          </Card>
-        );
-
-      case 'complete':
-        return (
-          <Card className="w-full max-w-2xl">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <CheckCircle className="h-6 w-6 text-green-600" />
-                Onboarding Complete!
-              </CardTitle>
-              <CardDescription>
-                Welcome to Agnus Link! You can now access your dashboard.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button 
-                onClick={() => navigate('/dashboard')}
-                className="w-full"
-              >
-                Go to Dashboard
-              </Button>
-            </CardContent>
-          </Card>
-        );
-
-      default:
-        return (
-          <Card className="w-full max-w-2xl">
-            <CardHeader>
-              <CardTitle>Welcome to Agnus Link!</CardTitle>
-              <CardDescription>
-                Let's get you set up with our affiliate program.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {error && (
-                <div className="bg-red-50 p-4 rounded-lg">
-                  <p className="text-sm text-red-800">{error}</p>
-                </div>
-              )}
-              <Button 
-                onClick={fetchOnboardingStatus}
-                className="w-full"
-                disabled={loading}
-              >
-                {loading ? (
-                  <>
-                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                    Loading...
-                  </>
-                ) : (
-                  'Start Onboarding'
-                )}
-              </Button>
-            </CardContent>
-          </Card>
-        );
-    }
-  };
+  // If onboarding is complete
+  if (onboardingData?.is_complete) {
+    return (
+      <div className=\"min-h-screen bg-gray-50 flex items-center justify-center\">
+        <div className=\"bg-white p-8 rounded-lg shadow-md max-w-md w-full text-center\">
+          <div className=\"text-green-600 mb-4\">
+            <svg className=\"w-16 h-16 mx-auto\" fill=\"currentColor\" viewBox=\"0 0 20 20\">
+              <path fillRule=\"evenodd\" d=\"M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z\" clipRule=\"evenodd\" />
+            </svg>
+          </div>
+          <h2 className=\"text-2xl font-bold text-gray-900 mb-4\">Onboarding Complete!</h2>
+          <p className=\"text-gray-600 mb-6\">
+            Your onboarding has been completed successfully. Our team will send you the finder's fee agreement to sign shortly.
+          </p>
+          <div className=\"bg-blue-50 p-4 rounded-lg\">
+            <p className=\"text-sm text-blue-800\">
+              <strong>Next Step:</strong> Wait for our team to send you the agreement via email.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-12 px-4">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">
-            Complete Your Onboarding
-          </h1>
-          <p className="text-gray-600">
-            Follow these steps to get full access to your affiliate dashboard
-          </p>
-        </div>
-
+    <div className=\"min-h-screen bg-gray-50 py-8\">
+      <div className=\"max-w-2xl mx-auto px-4\">
         {/* Progress Bar */}
-        <div className="mb-8">
-          <div className="flex justify-between text-sm text-gray-600 mb-2">
-            <span>Progress</span>
-            <span>{Math.round(getProgressPercentage())}% Complete</span>
+        <div className=\"mb-8\">
+          <div className=\"flex items-center justify-between mb-4\">
+            <h1 className=\"text-2xl font-bold text-gray-900\">Complete Your Onboarding</h1>
+            <span className=\"text-sm text-gray-500\">Step {currentStep} of 3</span>
           </div>
-          <Progress value={getProgressPercentage()} className="h-2" />
+          <div className=\"w-full bg-gray-200 rounded-full h-2\">
+            <div 
+              className=\"bg-blue-600 h-2 rounded-full transition-all duration-300\"
+              style={{ width: `${(currentStep / 3) * 100}%` }}
+            ></div>
+          </div>
         </div>
 
-        {/* Steps Overview */}
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
-          {[
-            { step: 'welcome', title: 'Welcome', icon: CheckCircle },
-            { step: 'signature', title: 'Sign Contract', icon: FileText },
-            { step: 'kyc_upload', title: 'Upload ID', icon: Upload },
-            { step: 'review', title: 'Review', icon: Clock },
-            { step: 'complete', title: 'Complete', icon: CheckCircle }
-          ].map((stepInfo) => {
-            const status = getStepStatus(stepInfo.step);
-            const Icon = stepInfo.icon;
-            
-            return (
-              <div 
-                key={stepInfo.step}
-                className={`p-4 rounded-lg text-center transition-colors ${
-                  status === 'completed' ? 'bg-green-100 text-green-800' :
-                  status === 'current' ? 'bg-blue-100 text-blue-800' :
-                  'bg-gray-100 text-gray-600'
-                }`}
-              >
-                <Icon className={`h-6 w-6 mx-auto mb-2 ${
-                  status === 'completed' ? 'text-green-600' :
-                  status === 'current' ? 'text-blue-600' :
-                  'text-gray-400'
-                }`} />
-                <p className="text-sm font-medium">{stepInfo.title}</p>
+        {/* Step Content */}
+        <div className=\"bg-white rounded-lg shadow-md p-6\">
+          {currentStep === 1 && (
+            <div>
+              <h2 className=\"text-xl font-semibold mb-4\">Personal Information</h2>
+              <p className=\"text-gray-600 mb-6\">Please provide your personal details to get started.</p>
+              
+              <div className=\"grid grid-cols-1 md:grid-cols-2 gap-4 mb-6\">
+                <div>
+                  <label className=\"block text-sm font-medium text-gray-700 mb-2\">First Name</label>
+                  <input
+                    type=\"text\"
+                    value={personalInfo.first_name}
+                    onChange={(e) => setPersonalInfo({...personalInfo, first_name: e.target.value})}
+                    className=\"w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500\"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className=\"block text-sm font-medium text-gray-700 mb-2\">Last Name</label>
+                  <input
+                    type=\"text\"
+                    value={personalInfo.last_name}
+                    onChange={(e) => setPersonalInfo({...personalInfo, last_name: e.target.value})}
+                    className=\"w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500\"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className=\"block text-sm font-medium text-gray-700 mb-2\">Phone Number</label>
+                  <input
+                    type=\"tel\"
+                    value={personalInfo.phone}
+                    onChange={(e) => setPersonalInfo({...personalInfo, phone: e.target.value})}
+                    className=\"w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500\"
+                  />
+                </div>
+                <div>
+                  <label className=\"block text-sm font-medium text-gray-700 mb-2\">Address</label>
+                  <input
+                    type=\"text\"
+                    value={personalInfo.address}
+                    onChange={(e) => setPersonalInfo({...personalInfo, address: e.target.value})}
+                    className=\"w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500\"
+                  />
+                </div>
+                <div>
+                  <label className=\"block text-sm font-medium text-gray-700 mb-2\">City</label>
+                  <input
+                    type=\"text\"
+                    value={personalInfo.city}
+                    onChange={(e) => setPersonalInfo({...personalInfo, city: e.target.value})}
+                    className=\"w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500\"
+                  />
+                </div>
+                <div>
+                  <label className=\"block text-sm font-medium text-gray-700 mb-2\">State</label>
+                  <input
+                    type=\"text\"
+                    value={personalInfo.state}
+                    onChange={(e) => setPersonalInfo({...personalInfo, state: e.target.value})}
+                    className=\"w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500\"
+                  />
+                </div>
+                <div>
+                  <label className=\"block text-sm font-medium text-gray-700 mb-2\">ZIP Code</label>
+                  <input
+                    type=\"text\"
+                    value={personalInfo.zip_code}
+                    onChange={(e) => setPersonalInfo({...personalInfo, zip_code: e.target.value})}
+                    className=\"w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500\"
+                  />
+                </div>
               </div>
-            );
-          })}
+
+              <button
+                onClick={updatePersonalInfo}
+                disabled={loading || !personalInfo.first_name || !personalInfo.last_name}
+                className=\"w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed\"
+              >
+                {loading ? 'Saving...' : 'Continue to Identity Verification'}
+              </button>
+            </div>
+          )}
+
+          {currentStep === 2 && (
+            <div>
+              <h2 className=\"text-xl font-semibold mb-4\">Identity Verification</h2>
+              <p className=\"text-gray-600 mb-6\">Please select your identification document type. Our team will contact you for document submission.</p>
+              
+              <div className=\"mb-6\">
+                <label className=\"block text-sm font-medium text-gray-700 mb-2\">Document Type</label>
+                <select
+                  value={kycData.document_type}
+                  onChange={(e) => setKycData({...kycData, document_type: e.target.value})}
+                  className=\"w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500\"
+                >
+                  <option value=\"drivers_license\">Driver's License</option>
+                  <option value=\"passport\">Passport</option>
+                  <option value=\"state_id\">State ID</option>
+                  <option value=\"other\">Other Government ID</option>
+                </select>
+              </div>
+
+              <div className=\"bg-yellow-50 border border-yellow-200 rounded-md p-4 mb-6\">
+                <div className=\"flex\">
+                  <div className=\"flex-shrink-0\">
+                    <svg className=\"h-5 w-5 text-yellow-400\" viewBox=\"0 0 20 20\" fill=\"currentColor\">
+                      <path fillRule=\"evenodd\" d=\"M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z\" clipRule=\"evenodd\" />
+                    </svg>
+                  </div>
+                  <div className=\"ml-3\">
+                    <h3 className=\"text-sm font-medium text-yellow-800\">Manual Review Process</h3>
+                    <div className=\"mt-2 text-sm text-yellow-700\">
+                      <p>Our team will contact you separately to collect your identification documents securely.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={submitKYC}
+                disabled={loading}
+                className=\"w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed\"
+              >
+                {loading ? 'Submitting...' : 'Continue to Final Step'}
+              </button>
+            </div>
+          )}
+
+          {currentStep === 3 && (
+            <div>
+              <h2 className=\"text-xl font-semibold mb-4\">Agreement Signing</h2>
+              <p className=\"text-gray-600 mb-6\">You're almost done! Our team will send you the finder's fee agreement to sign.</p>
+              
+              <div className=\"bg-blue-50 border border-blue-200 rounded-md p-4 mb-6\">
+                <div className=\"flex\">
+                  <div className=\"flex-shrink-0\">
+                    <svg className=\"h-5 w-5 text-blue-400\" viewBox=\"0 0 20 20\" fill=\"currentColor\">
+                      <path fillRule=\"evenodd\" d=\"M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z\" clipRule=\"evenodd\" />
+                    </svg>
+                  </div>
+                  <div className=\"ml-3\">
+                    <h3 className=\"text-sm font-medium text-blue-800\">What happens next?</h3>
+                    <div className=\"mt-2 text-sm text-blue-700\">
+                      <ul className=\"list-disc list-inside space-y-1\">
+                        <li>Our team will review your information</li>
+                        <li>We'll send you the finder's fee agreement via email</li>
+                        <li>You'll be able to sign the agreement electronically</li>
+                        <li>Once signed, you'll have full access to the affiliate portal</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={completeOnboarding}
+                disabled={loading}
+                className=\"w-full bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed\"
+              >
+                {loading ? 'Completing...' : 'Complete Onboarding'}
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Current Step Content */}
-        <div className="flex justify-center">
-          {renderStepContent()}
-        </div>
-
-        {/* Next Action Message */}
-        {onboardingData && onboardingData.next_action && (
-          <div className="mt-8 text-center">
-            <p className="text-gray-600">{onboardingData.next_action}</p>
-          </div>
-        )}
-
-        {/* Debug Info (only in development) */}
-        {process.env.NODE_ENV === 'development' && onboardingData && (
-          <div className="mt-8 p-4 bg-gray-100 rounded-lg">
-            <h3 className="font-semibold mb-2">Debug Info:</h3>
-            <pre className="text-xs text-gray-600 overflow-auto">
-              {JSON.stringify(onboardingData, null, 2)}
-            </pre>
+        {/* Error Display */}
+        {error && (
+          <div className=\"mt-4 bg-red-50 border border-red-200 rounded-md p-4\">
+            <div className=\"flex\">
+              <div className=\"flex-shrink-0\">
+                <svg className=\"h-5 w-5 text-red-400\" viewBox=\"0 0 20 20\" fill=\"currentColor\">
+                  <path fillRule=\"evenodd\" d=\"M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z\" clipRule=\"evenodd\" />
+                </svg>
+              </div>
+              <div className=\"ml-3\">
+                <h3 className=\"text-sm font-medium text-red-800\">Error</h3>
+                <div className=\"mt-2 text-sm text-red-700\">
+                  <p>{error}</p>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </div>
