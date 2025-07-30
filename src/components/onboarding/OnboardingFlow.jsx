@@ -4,14 +4,14 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { Button } from '../ui/button';
 import { Progress } from '../ui/progress';
-import { CheckCircle, Clock, Upload, FileText, AlertCircle } from 'lucide-react';
+import { CheckCircle, Clock, Upload, FileText, AlertCircle, RefreshCw } from 'lucide-react';
 
 const OnboardingFlow = () => {
   const { user, apiRequest } = useAuth();
   const navigate = useNavigate();
   const [onboardingData, setOnboardingData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [currentAction, setCurrentAction] = useState(null);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     fetchOnboardingStatus();
@@ -19,19 +19,29 @@ const OnboardingFlow = () => {
 
   const fetchOnboardingStatus = async () => {
     try {
+      setError(null);
+      console.log('Fetching onboarding status...');
+      
       const response = await apiRequest('/api/onboarding/status');
+      console.log('Onboarding status response:', response);
+      
       if (response && response.ok) {
         const data = await response.json();
+        console.log('Onboarding data:', data);
         setOnboardingData(data);
-        setCurrentAction(data.next_action);
         
         // If onboarding is complete, redirect to dashboard
         if (data.onboarding_complete) {
           navigate('/dashboard', { replace: true });
         }
+      } else {
+        const errorData = await response.json();
+        console.error('Onboarding status error:', errorData);
+        setError(errorData.error || 'Failed to fetch onboarding status');
       }
     } catch (error) {
       console.error('Error fetching onboarding status:', error);
+      setError('Unable to connect to server. Please check your connection.');
     } finally {
       setLoading(false);
     }
@@ -40,29 +50,53 @@ const OnboardingFlow = () => {
   const handleStartSigning = async () => {
     try {
       setLoading(true);
+      setError(null);
+      
+      console.log('Starting document signing...');
       const response = await apiRequest('/api/onboarding/start-signature', {
         method: 'POST'
       });
       
       if (response && response.ok) {
         const data = await response.json();
+        console.log('Signing response:', data);
         
-        if (data.signing_url) {
+        if (data.signing_link) {
           // Open signing URL in new window/tab
-          window.open(data.signing_url, '_blank', 'width=800,height=600');
+          const signingWindow = window.open(
+            data.signing_link, 
+            '_blank', 
+            'width=900,height=700,scrollbars=yes,resizable=yes'
+          );
           
-          // Refresh status after a delay
-          setTimeout(() => {
-            fetchOnboardingStatus();
-          }, 2000);
+          // Check if window was blocked
+          if (!signingWindow) {
+            alert('Please allow popups for this site to open the signing window.');
+            return;
+          }
+          
+          // Monitor window and refresh status when closed
+          const checkClosed = setInterval(() => {
+            if (signingWindow.closed) {
+              clearInterval(checkClosed);
+              console.log('Signing window closed, refreshing status...');
+              setTimeout(() => {
+                fetchOnboardingStatus();
+              }, 2000);
+            }
+          }, 1000);
+          
+        } else {
+          setError('No signing link received from server');
         }
       } else {
         const errorData = await response.json();
-        alert(`Error: ${errorData.error}`);
+        console.error('Signing error:', errorData);
+        setError(errorData.error || 'Failed to start document signing');
       }
     } catch (error) {
       console.error('Error starting signature:', error);
-      alert('Failed to start document signing. Please try again.');
+      setError('Failed to start document signing. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -72,65 +106,113 @@ const OnboardingFlow = () => {
     const file = event.target.files[0];
     if (!file) return;
 
+    // Validate file size (10MB limit)
+    if (file.size > 10 * 1024 * 1024) {
+      setError('File size must be less than 10MB');
+      return;
+    }
+
+    // Validate file type
+    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+    if (!allowedTypes.includes(file.type)) {
+      setError('Please upload a PDF, JPG, or PNG file');
+      return;
+    }
+
     try {
       setLoading(true);
+      setError(null);
       
       const formData = new FormData();
       formData.append('file', file);
       formData.append('document_type', 'government_id');
 
+      console.log('Uploading KYC document...');
       const response = await apiRequest('/api/onboarding/upload-kyc', {
         method: 'POST',
         body: formData,
-        headers: {} // Remove Content-Type to let browser set it for FormData
+        // Don't set Content-Type header for FormData
       });
 
       if (response && response.ok) {
         const data = await response.json();
-        alert('Document uploaded successfully!');
+        console.log('Upload response:', data);
+        alert('Document uploaded successfully! It will be reviewed by our team.');
         fetchOnboardingStatus();
       } else {
         const errorData = await response.json();
-        alert(`Upload failed: ${errorData.error}`);
+        console.error('Upload error:', errorData);
+        setError(errorData.error || 'Failed to upload document');
       }
     } catch (error) {
       console.error('Error uploading file:', error);
-      alert('Failed to upload document. Please try again.');
+      setError('Failed to upload document. Please try again.');
     } finally {
       setLoading(false);
+      // Reset file input
+      event.target.value = '';
     }
   };
 
   if (loading && !onboardingData) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600"></div>
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading onboarding status...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error && !onboardingData) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-red-600">
+              <AlertCircle className="h-6 w-6" />
+              Connection Error
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">{error}</p>
+            <Button onClick={fetchOnboardingStatus} className="w-full">
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Try Again
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
   const getProgressPercentage = () => {
     if (!onboardingData) return 0;
-    
-    const step = onboardingData.current_step || 1;
-    return Math.min((step / 5) * 100, 100);
+    return onboardingData.progress || 0;
   };
 
-  const getStepStatus = (stepNumber) => {
-    if (!onboardingData) return 'pending';
+  const getCurrentStep = () => {
+    if (!onboardingData) return 'welcome';
+    return onboardingData.current_step || 'welcome';
+  };
+
+  const getStepStatus = (stepName) => {
+    const currentStep = getCurrentStep();
+    const steps = ['welcome', 'signature', 'kyc_upload', 'review', 'complete'];
+    const currentIndex = steps.indexOf(currentStep);
+    const stepIndex = steps.indexOf(stepName);
     
-    const currentStep = onboardingData.current_step || 1;
-    
-    if (stepNumber < currentStep) return 'completed';
-    if (stepNumber === currentStep) return 'current';
+    if (stepIndex < currentIndex) return 'completed';
+    if (stepIndex === currentIndex) return 'current';
     return 'pending';
   };
 
   const renderStepContent = () => {
-    if (!currentAction) return null;
+    const currentStep = getCurrentStep();
 
-    switch (currentAction.action) {
-      case 'sign_contract':
+    switch (currentStep) {
+      case 'signature':
         return (
           <Card className="w-full max-w-2xl">
             <CardHeader>
@@ -149,18 +231,30 @@ const OnboardingFlow = () => {
                   Please read it carefully before signing.
                 </p>
               </div>
+              {error && (
+                <div className="bg-red-50 p-4 rounded-lg">
+                  <p className="text-sm text-red-800">{error}</p>
+                </div>
+              )}
               <Button 
                 onClick={handleStartSigning} 
                 disabled={loading}
                 className="w-full"
               >
-                {loading ? 'Starting...' : 'Start Document Signing'}
+                {loading ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    Starting...
+                  </>
+                ) : (
+                  'Start Document Signing'
+                )}
               </Button>
             </CardContent>
           </Card>
         );
 
-      case 'upload_kyc':
+      case 'kyc_upload':
         return (
           <Card className="w-full max-w-2xl">
             <CardHeader>
@@ -175,13 +269,18 @@ const OnboardingFlow = () => {
             <CardContent className="space-y-4">
               <div className="bg-yellow-50 p-4 rounded-lg">
                 <p className="text-sm text-yellow-800">
-                  Accepted documents: Driver's License, Passport, State ID Card
+                  <strong>Accepted documents:</strong> Driver's License, Passport, State ID Card
                 </p>
                 <p className="text-sm text-yellow-800 mt-1">
-                  File formats: PDF, JPG, PNG (Max 10MB)
+                  <strong>File formats:</strong> PDF, JPG, PNG (Max 10MB)
                 </p>
               </div>
-              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
+              {error && (
+                <div className="bg-red-50 p-4 rounded-lg">
+                  <p className="text-sm text-red-800">{error}</p>
+                </div>
+              )}
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 transition-colors">
                 <Upload className="h-12 w-12 mx-auto text-gray-400 mb-4" />
                 <p className="text-sm text-gray-600 mb-4">
                   Click to select your government ID document
@@ -192,10 +291,18 @@ const OnboardingFlow = () => {
                   onChange={handleFileUpload}
                   className="hidden"
                   id="kyc-upload"
+                  disabled={loading}
                 />
                 <label htmlFor="kyc-upload">
-                  <Button variant="outline" disabled={loading}>
-                    {loading ? 'Uploading...' : 'Select File'}
+                  <Button variant="outline" disabled={loading} className="cursor-pointer">
+                    {loading ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                        Uploading...
+                      </>
+                    ) : (
+                      'Select File'
+                    )}
                   </Button>
                 </label>
               </div>
@@ -203,7 +310,7 @@ const OnboardingFlow = () => {
           </Card>
         );
 
-      case 'wait':
+      case 'review':
         return (
           <Card className="w-full max-w-2xl">
             <CardHeader>
@@ -226,14 +333,25 @@ const OnboardingFlow = () => {
                 onClick={fetchOnboardingStatus}
                 variant="outline"
                 className="w-full"
+                disabled={loading}
               >
-                Refresh Status
+                {loading ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    Checking...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Refresh Status
+                  </>
+                )}
               </Button>
             </CardContent>
           </Card>
         );
 
-      case 'access_dashboard':
+      case 'complete':
         return (
           <Card className="w-full max-w-2xl">
             <CardHeader>
@@ -265,12 +383,25 @@ const OnboardingFlow = () => {
                 Let's get you set up with our affiliate program.
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
+              {error && (
+                <div className="bg-red-50 p-4 rounded-lg">
+                  <p className="text-sm text-red-800">{error}</p>
+                </div>
+              )}
               <Button 
                 onClick={fetchOnboardingStatus}
                 className="w-full"
+                disabled={loading}
               >
-                Start Onboarding
+                {loading ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    Loading...
+                  </>
+                ) : (
+                  'Start Onboarding'
+                )}
               </Button>
             </CardContent>
           </Card>
@@ -303,19 +434,19 @@ const OnboardingFlow = () => {
         {/* Steps Overview */}
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
           {[
-            { number: 1, title: 'Welcome', icon: CheckCircle },
-            { number: 2, title: 'Sign Contract', icon: FileText },
-            { number: 3, title: 'Upload ID', icon: Upload },
-            { number: 4, title: 'Review', icon: Clock },
-            { number: 5, title: 'Complete', icon: CheckCircle }
-          ].map((step) => {
-            const status = getStepStatus(step.number);
-            const Icon = step.icon;
+            { step: 'welcome', title: 'Welcome', icon: CheckCircle },
+            { step: 'signature', title: 'Sign Contract', icon: FileText },
+            { step: 'kyc_upload', title: 'Upload ID', icon: Upload },
+            { step: 'review', title: 'Review', icon: Clock },
+            { step: 'complete', title: 'Complete', icon: CheckCircle }
+          ].map((stepInfo) => {
+            const status = getStepStatus(stepInfo.step);
+            const Icon = stepInfo.icon;
             
             return (
               <div 
-                key={step.number}
-                className={`p-4 rounded-lg text-center ${
+                key={stepInfo.step}
+                className={`p-4 rounded-lg text-center transition-colors ${
                   status === 'completed' ? 'bg-green-100 text-green-800' :
                   status === 'current' ? 'bg-blue-100 text-blue-800' :
                   'bg-gray-100 text-gray-600'
@@ -326,7 +457,7 @@ const OnboardingFlow = () => {
                   status === 'current' ? 'text-blue-600' :
                   'text-gray-400'
                 }`} />
-                <p className="text-sm font-medium">{step.title}</p>
+                <p className="text-sm font-medium">{stepInfo.title}</p>
               </div>
             );
           })}
@@ -337,10 +468,20 @@ const OnboardingFlow = () => {
           {renderStepContent()}
         </div>
 
-        {/* Status Message */}
-        {currentAction && (
+        {/* Next Action Message */}
+        {onboardingData && onboardingData.next_action && (
           <div className="mt-8 text-center">
-            <p className="text-gray-600">{currentAction.message}</p>
+            <p className="text-gray-600">{onboardingData.next_action}</p>
+          </div>
+        )}
+
+        {/* Debug Info (only in development) */}
+        {process.env.NODE_ENV === 'development' && onboardingData && (
+          <div className="mt-8 p-4 bg-gray-100 rounded-lg">
+            <h3 className="font-semibold mb-2">Debug Info:</h3>
+            <pre className="text-xs text-gray-600 overflow-auto">
+              {JSON.stringify(onboardingData, null, 2)}
+            </pre>
           </div>
         )}
       </div>
